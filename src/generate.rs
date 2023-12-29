@@ -2,21 +2,21 @@ use std::collections::HashMap;
 use std::fs::{self, Permissions};
 use std::path::{Path, PathBuf};
 use std::process::Command;
-use std::str::FromStr;
+use std::str::FromStr as _;
 
 use anyhow::{bail, Context as _, Result};
 use clap::Args;
-
 use minijinja::Environment;
+use tapgen::metadata::Metadata;
 use tempfile::{NamedTempFile, TempPath};
 use walkdir::WalkDir;
 
 use tapgen::template::{Output, Template};
 use tapgen::variable::{Variable, VariableValue};
 
-use crate::git::{Config as GitConfig, Source as GitSource};
+use crate::config::Config;
+use crate::git::{self, Source as GitSource};
 use crate::prompt;
-use crate::App;
 
 #[derive(Clone, Args)]
 pub(crate) struct Generate {
@@ -31,19 +31,17 @@ pub(crate) struct Generate {
     dst: PathBuf,
 }
 
-impl App {
-    pub(crate) fn generate(&self) -> Result<()> {
-        let args = &self.cli.generate;
-
-        let mut path = if let Ok(src) = GitSource::from_str(&args.src) {
-            src.clone(&self.config.prefix)
-                .context(format!("failed to resolve git source: {}", args.src))?
+impl Generate {
+    pub(crate) fn run(&self, config: &Config) -> Result<()> {
+        let mut path = if let Ok(source) = GitSource::from_str(&self.src) {
+            source
+                .resolve(&config.prefix)
+                .context(format!("failed to resolve git source: {source}"))?
         } else {
-            PathBuf::from(&args.src)
+            PathBuf::from(&self.src)
                 .canonicalize()
-                .context(format!("failed to resolve local source: {}", args.src))?
+                .context(format!("failed to resolve path source: {}", self.src))?
         };
-
         if path.is_dir() {
             path.push("tapgen.toml");
         }
@@ -51,31 +49,22 @@ impl App {
         let template = Template::load(&path)
             .context(format!("failed to load template from {}", path.display()))?;
 
-        println!(
-            "You are currently using '{}' by {}.",
-            template.metadata.name, template.metadata.author
-        );
-        if let Some(description) = &template.metadata.description {
-            println!("{description}");
+        print_template_metadata(&template.metadata);
+
+        let script = template.root.join("tapgen.before.hook");
+        if script.exists() {
+            println!();
+            run_hook_script(&script, &template.root)?;
         }
-        if let Some(url) = &template.metadata.url {
-            println!("> {url}");
+
+        let mut values = HashMap::new();
+        if git::check_installed()? {
+            values.insert(
+                String::from("_git"),
+                minijinja::Value::from_serializable(&git::obtain_config()?),
+            );
         }
         println!();
-
-        let before_hook_script_path = template.root.join("tapgen.before.hook");
-        if before_hook_script_path.exists() {
-            run_hook_script(&before_hook_script_path, &template.root)?;
-            println!();
-        }
-
-        let git_config = GitConfig::obtain()?;
-        let mut values = HashMap::new();
-        values.insert(
-            String::from("__git__"),
-            minijinja::Value::from_serializable(&git_config),
-        );
-
         for (name, variable) in &template.variables {
             if let Some(condition) = &variable.condition {
                 let value = condition.eval(&values).context(format!(
@@ -94,25 +83,44 @@ impl App {
             .context("failed to generate from template")?;
 
         println!();
-        let base = &args.dst.join(output.basename());
         inspect_output(&output);
-        if confirm_output(output, &args.dst)? {
-            let after_hook_script_path = template.root.join("tapgen.after.hook");
-            if after_hook_script_path.exists() {
+
+        let base = self.dst.join(output.basename());
+        if confirm_output(output, &self.dst)? {
+            let script = template.root.join("tapgen.after.hook");
+            if script.exists() {
                 println!();
-                run_hook_script(
-                    render_hook_script_as_template(
-                        after_hook_script_path,
-                        &template.environment,
-                        &values,
-                    )?,
-                    base,
-                )?;
+                let path = render_hook_script_as_template(script, &template.environment, &values)?;
+                run_hook_script(path, base)?;
             }
         }
 
         Ok(())
     }
+}
+
+fn print_template_metadata(metadata: &Metadata) {
+    println!(
+        "You are currently using '{}' by {}.",
+        metadata.name, metadata.author
+    );
+    if let Some(description) = &metadata.description {
+        println!("{description}");
+    }
+    if let Some(url) = &metadata.url {
+        println!("> {url}");
+    }
+}
+
+fn run_hook_script(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<()> {
+    if prompt::confirm("Run hook script?", true) {
+        let path = path.as_ref();
+        Command::new(path)
+            .current_dir(&cwd)
+            .status()
+            .context(format!("failed to run hook script: {}", path.display()))?;
+    }
+    Ok(())
 }
 
 fn render_hook_script_as_template(
@@ -141,17 +149,6 @@ fn render_hook_script_as_template(
             .context("failed to set temporary file permission")?;
     }
     Ok(file.into_temp_path())
-}
-
-fn run_hook_script(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<()> {
-    if prompt::confirm("Run hook script?", true) {
-        let path = path.as_ref();
-        Command::new(path)
-            .current_dir(&cwd)
-            .status()
-            .context(format!("failed to run hook script: {}", path.display()))?;
-    }
-    Ok(())
 }
 
 fn prompt_variable(variable: &Variable) -> minijinja::Value {

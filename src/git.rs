@@ -1,57 +1,14 @@
+use std::collections::HashMap;
 use std::fmt::Display;
 use std::path::{Path, PathBuf};
 use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use anyhow::{bail, Context, Error, Ok, Result};
+use anyhow::{bail, Context, Error, Result};
 use regex::Regex;
-use serde::Serialize;
 
-#[derive(Serialize)]
-pub(crate) struct Config {
-    pub(crate) name: Option<String>,
-    pub(crate) email: Option<String>,
-}
-
-impl Config {
-    fn obtain_value(name: &str) -> Result<Option<String>> {
-        let command = Command::new("git")
-            .arg("config")
-            .arg("--global")
-            .arg(name)
-            .stdout(Stdio::piped())
-            .stdin(Stdio::null())
-            .stderr(Stdio::null())
-            .output()
-            .context("failed to execute git config command")?;
-
-        let value = if command.status.success() {
-            let output = String::from_utf8(command.stdout)
-                .expect("command output encoding should be utf-8")
-                .trim()
-                .to_string();
-            Some(output)
-        } else {
-            None
-        };
-
-        Ok(value)
-    }
-
-    pub(crate) fn obtain() -> Result<Self> {
-        if !check_git_installed()? {
-            return Ok(Self {
-                name: None,
-                email: None,
-            });
-        }
-        Ok(Self {
-            name: Self::obtain_value("user.name")?,
-            email: Self::obtain_value("user.email")?,
-        })
-    }
-}
+use crate::{git, prompt};
 
 #[derive(Clone)]
 pub(crate) enum Host {
@@ -85,7 +42,7 @@ impl Display for Host {
 
 #[derive(Clone)]
 pub(crate) struct Source {
-    pub(crate) host: Host,
+    host: Host,
     pub(crate) owner: String,
     pub(crate) repo: String,
 }
@@ -117,34 +74,131 @@ impl FromStr for Source {
 }
 
 impl Source {
-    pub(crate) fn clone(&self, dst: impl AsRef<Path>) -> Result<PathBuf> {
-        let dst = dst.as_ref().join(&self.owner).join(&self.repo);
-
+    pub(crate) fn resolve(&self, prefix: impl AsRef<Path>) -> Result<PathBuf> {
+        if !git::check_installed()? {
+            bail!("git is not installed; required for git source")
+        }
+        let dst = &prefix.as_ref().join(&self.owner).join(&self.repo);
         if dst.exists() {
-            return Ok(dst);
+            println!("Repository already exists: {}", dst.display());
+            println!("Checking for updates...");
+            let repository = Repository::new(dst);
+            if repository
+                .check_fastforwardable()
+                .context("failed to check if git repository is fast-forwardable")?
+            {
+                if prompt::confirm("Outdated. Pull to update?", true) {
+                    repository.pull()?;
+                }
+            } else {
+                println!("Repository is up to date.");
+            }
+        } else {
+            let _ = Repository::clone(self, dst)?;
         }
-
-        if !check_git_installed()? {
-            bail!("git is not installed")
-        }
-
-        let status = Command::new("git")
-            .arg("clone")
-            .arg(self.to_string())
-            .arg(&dst)
-            .status()
-            .context("failed to execute git clone command")?;
         println!();
-
-        if !status.success() {
-            bail!("failed to clone git repository")
-        }
-
-        Ok(dst)
+        Ok(dst.clone())
     }
 }
 
-fn check_git_installed() -> Result<bool> {
+pub(crate) struct Repository(PathBuf);
+
+impl Repository {
+    pub(crate) fn new(path: impl AsRef<Path>) -> Self {
+        Self(path.as_ref().to_path_buf())
+    }
+
+    pub(crate) fn clone(src: impl ToString, dst: impl AsRef<Path>) -> Result<Self> {
+        let status = Command::new("git")
+            .arg("clone")
+            .arg(src.to_string())
+            .arg(dst.as_ref())
+            .status()
+            .context("failed to execute git clone command")?;
+        if !status.success() {
+            bail!("failed to clone git repository")
+        }
+        Ok(Self(dst.as_ref().to_path_buf()))
+    }
+
+    pub(crate) fn pull(&self) -> Result<()> {
+        let status = Command::new("git")
+            .arg("pull")
+            .current_dir(&self.0)
+            .status()
+            .context("failed to execute git pull command")?;
+        if !status.success() {
+            bail!("failed to pull git repository")
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_fastforwardable(&self) -> Result<bool> {
+        let status = Command::new("git")
+            .arg("remote")
+            .arg("update")
+            .current_dir(&self.0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::null())
+            .status()
+            .context("failed to execute git remote update command")?;
+        if !status.success() {
+            bail!("failed to update remote refs of git repository")
+        }
+        let command = Command::new("git")
+            .arg("status")
+            .arg("-uno")
+            .current_dir(&self.0)
+            .stdin(Stdio::null())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::null())
+            .output()
+            .context("failed to execute git status command")?;
+        if !command.status.success() {
+            bail!("failed to check updated status of git repository")
+        }
+        let output = String::from_utf8(command.stdout)
+            .expect("command output encoding should be utf-8")
+            .to_string();
+        Ok(output.contains("can be fast-forwarded"))
+    }
+}
+
+fn obtain_config_value(name: &str) -> Result<Option<String>> {
+    let command = Command::new("git")
+        .arg("config")
+        .arg("--global")
+        .arg(name)
+        .stdout(Stdio::piped())
+        .stdin(Stdio::null())
+        .stderr(Stdio::null())
+        .output()
+        .context("failed to execute git config command")?;
+    let value = if command.status.success() {
+        let output = String::from_utf8(command.stdout)
+            .expect("command output encoding should be utf-8")
+            .trim()
+            .to_string();
+        Some(output)
+    } else {
+        None
+    };
+    Ok(value)
+}
+
+pub(crate) fn obtain_config() -> Result<HashMap<String, String>> {
+    let mut config = HashMap::new();
+    if let Some(name) = obtain_config_value("user.name")? {
+        config.insert(String::from("name"), name);
+    }
+    if let Some(email) = obtain_config_value("user.email")? {
+        config.insert(String::from("email"), email);
+    }
+    Ok(config)
+}
+
+pub(crate) fn check_installed() -> Result<bool> {
     let check = Command::new("git")
         .arg("--version")
         .stdout(Stdio::null())

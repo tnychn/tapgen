@@ -1,26 +1,16 @@
 // ===== ROADMAP =====
 //
-// DONE: load git config into context
+// TODO: implement extensible custom template functions
 //
-// DONE: implement hook commands
-//
-// TODO: implement git checkout after clone
-//
-// TODO: implement git pull for outdated template
+// TODO: implement custom base path shorthand
 //
 // TODO: implement cli variable value override
 //
 // TODO: implement remote subdirectory template
 //
-// TODO: implement custom base path shorthand
-//
 // TODO: implement generation replay
 //
 // TODO: implement templated defaults
-//
-// TODO: implement extensible custom template functions
-//
-// TODO: conditional generation of file/directory
 
 mod config;
 mod generate;
@@ -64,20 +54,10 @@ struct Cli {
     version: Option<bool>,
 }
 
-pub(crate) struct App {
-    cli: Cli,
-    config: Config,
-}
-
-impl App {
-    fn init() -> Self {
-        let cli = Cli::parse();
-        let config = Config::init().expect("failed to initialize config");
-        fs::create_dir_all(&config.prefix).expect("failed to create prefix directory");
-        Self { cli, config }
-    }
-}
-
 fn main() -> Result<()> {
-    App::init().generate()
+    let cli = Cli::parse();
+    let config = Config::init().expect("failed to initialize config");
+    fs::create_dir_all(&config.prefix).expect("failed to create prefix directory");
+
+    cli.generate.run(&config)
 }
