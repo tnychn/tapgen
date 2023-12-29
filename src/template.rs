@@ -100,11 +100,11 @@ impl Template {
 
     fn render_template(
         &self,
-        path: impl AsRef<Path>,
+        name: impl AsRef<Path>,
         dst: impl AsRef<Path>,
         values: &HashMap<String, Value>,
     ) -> Result<()> {
-        let name = utils::path_to_string(path);
+        let name = utils::path_to_string(name);
         let template = self.environment.get_template(&name)?;
         let file = File::create(dst)?;
         template.render_to_write(values, file)?;
@@ -112,33 +112,52 @@ impl Template {
     }
 
     pub fn generate(&self, values: &HashMap<String, Value>) -> Result<Output> {
-        let dir = TempDir::with_prefix("output-")?;
+        let mut basename: Option<String> = None;
+        let tempdir = TempDir::with_prefix("tapgen-")?;
         for entry in self.entries.values().flatten() {
-            let name = entry.path().strip_prefix(&self.root).unwrap();
-            let path = dir.path().join(self.render_path(name, values)?);
+            let raw_name = entry.path().strip_prefix(&self.root).unwrap();
+            let rendered_name = self.render_path(raw_name, values)?;
+            let rendered_path = tempdir.path().join(&rendered_name);
+            if entry.path() == self.base {
+                basename = Some(rendered_name);
+            }
             if entry.file_type().is_file() {
                 if self.metadata.copy.matches_path_any(entry.path()) {
-                    fs::copy(entry.path(), path)?;
+                    fs::copy(entry.path(), rendered_path)?;
                 } else {
-                    self.render_template(name, path, values)?;
+                    self.render_template(raw_name, rendered_path, values)?;
                 }
             } else if entry.file_type().is_dir() {
-                fs::create_dir_all(path)?;
+                fs::create_dir_all(rendered_path)?;
             }
         }
-        Ok(Output(dir))
+        Ok(Output {
+            tempdir,
+            basename: basename.expect("basename should be determined"),
+        })
     }
 }
 
-pub struct Output(TempDir);
+pub struct Output {
+    tempdir: TempDir,
+    basename: String,
+}
 
 impl Output {
+    pub fn basename(&self) -> &str {
+        &self.basename
+    }
+
     pub fn path(&self) -> &Path {
-        self.0.path()
+        self.tempdir.path()
+    }
+
+    pub fn base(&self) -> PathBuf {
+        self.tempdir.path().join(self.basename())
     }
 
     pub fn dispose(self) -> Result<()> {
-        Ok(self.0.close()?)
+        Ok(self.tempdir.close()?)
     }
 
     pub fn apply(self, dst: impl AsRef<Path>) -> Result<()> {

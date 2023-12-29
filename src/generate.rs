@@ -63,13 +63,9 @@ impl App {
         }
         println!();
 
-        let path = path
-            .parent()
-            .expect("template path should have parent directory");
-
-        let before_hook_script_path = path.join("tapgen.before.hook");
+        let before_hook_script_path = template.root.join("tapgen.before.hook");
         if before_hook_script_path.exists() {
-            run_hook_script(&before_hook_script_path, path)?;
+            run_hook_script(&before_hook_script_path, &template.root)?;
             println!();
         }
 
@@ -97,17 +93,21 @@ impl App {
             .generate(&values)
             .context("failed to generate from template")?;
 
+        println!();
+        let base = &args.dst.join(output.basename());
         inspect_output(&output);
         if confirm_output(output, &args.dst)? {
-            let after_hook_script_path = path.join("tapgen.after.hook");
+            let after_hook_script_path = template.root.join("tapgen.after.hook");
             if after_hook_script_path.exists() {
-                let path = render_hook_script_as_template(
-                    &after_hook_script_path,
-                    &template.environment,
-                    &values,
-                )?;
                 println!();
-                run_hook_script(path, &args.dst)?;
+                run_hook_script(
+                    render_hook_script_as_template(
+                        after_hook_script_path,
+                        &template.environment,
+                        &values,
+                    )?,
+                    base,
+                )?;
             }
         }
 
@@ -127,7 +127,7 @@ fn render_hook_script_as_template(
         "failed to load hook script as template: {}",
         path.display()
     ))?;
-    let file = NamedTempFile::new().context("failed to create temporary file")?;
+    let file = NamedTempFile::with_prefix("").context("failed to create temporary file")?;
     template.render_to_write(values, &file).context(format!(
         "failed to render hook script as template: {}",
         path.display()
@@ -136,17 +136,16 @@ fn render_hook_script_as_template(
     {
         use std::os::unix::fs::PermissionsExt as _;
         let perms = Permissions::from_mode(0o744);
-        file.as_file().set_permissions(perms).context(format!(
-            "failed to set file permission for file: {}",
-            file.path().display()
-        ))?;
+        file.as_file()
+            .set_permissions(perms)
+            .context("failed to set temporary file permission")?;
     }
     Ok(file.into_temp_path())
 }
 
 fn run_hook_script(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<()> {
-    let path = path.as_ref();
     if prompt::confirm("Run hook script?", true) {
+        let path = path.as_ref();
         Command::new(path)
             .current_dir(&cwd)
             .status()
@@ -207,7 +206,8 @@ fn prompt_variable(variable: &Variable) -> minijinja::Value {
 
 fn inspect_output(output: &Output) {
     // TODO: improve output readability
-    let walker = WalkDir::new(output.path());
+    println!("[Output]");
+    let walker = WalkDir::new(output.base());
     for entry in walker {
         let entry = entry.unwrap();
         let depth = entry.depth();
