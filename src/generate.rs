@@ -12,7 +12,7 @@ use tempfile::{NamedTempFile, TempPath};
 use walkdir::WalkDir;
 
 use tapgen::template::{Output, Template};
-use tapgen::variable::Variable;
+use tapgen::variable::{Variable, VariableValue};
 
 use crate::git::{Config as GitConfig, Source as GitSource};
 use crate::prompt;
@@ -156,17 +156,21 @@ fn run_hook_script(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<()> 
 }
 
 fn prompt_variable(variable: &Variable) -> minijinja::Value {
-    match &variable.default {
-        toml::Value::String(default) => {
+    match &variable.value {
+        VariableValue::String {
+            default,
+            pattern,
+            choices,
+        } => {
             let default = if default.is_empty() {
                 None
             } else {
                 Some(default.clone())
             };
-            if let Some(choices) = &variable.choices {
+            if let Some(choices) = choices {
                 minijinja::Value::from(prompt::select(&variable.prompt, choices, default))
             } else {
-                let validator = variable.pattern.as_ref().map(|pattern| {
+                let validator = pattern.as_ref().map(|pattern| {
                     |input: &String| {
                         if !pattern.is_match(input) {
                             let pattern = pattern.as_str();
@@ -178,34 +182,26 @@ fn prompt_variable(variable: &Variable) -> minijinja::Value {
                 minijinja::Value::from(prompt::input(&variable.prompt, default, validator))
             }
         }
-        toml::Value::Array(defaults) => {
-            let defaults = defaults
-                .iter()
-                .map(|value| value.as_str().unwrap().to_string())
-                .collect::<Vec<String>>();
-            let choices = variable.choices.as_ref().unwrap();
-            minijinja::Value::from(prompt::multi_select(
-                &variable.prompt,
-                choices,
-                Some(&defaults),
-            ))
-        }
-        toml::Value::Integer(default) => minijinja::Value::from(prompt::input(
+        VariableValue::Array { default, choices } => minijinja::Value::from(prompt::multi_select(
+            &variable.prompt,
+            choices,
+            Some(default),
+        )),
+        VariableValue::Integer { default, range } => minijinja::Value::from(prompt::input(
             &variable.prompt,
             Some(*default),
             Some(|input: &i64| {
-                if let Some((min, max)) = variable.range {
-                    if *input < min || *input > max {
+                if let Some((min, max)) = range {
+                    if input < min || input > max {
                         bail!("input out of range: [{min}, {max}]")
                     }
                 }
                 Ok(())
             }),
         )),
-        toml::Value::Boolean(default) => {
+        VariableValue::Boolean { default } => {
             minijinja::Value::from(prompt::confirm(&variable.prompt, *default))
         }
-        _ => unreachable!("variable type should always match"),
     }
 }
 

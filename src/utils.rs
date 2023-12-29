@@ -15,22 +15,17 @@ pub enum Error {
     #[error("invalid variable: '{name}'")]
     ValidateVariable {
         name: String,
-        source: ValidateVariableError,
+        source: InvalidVariableError,
     },
 }
 
 #[derive(Debug, thiserror::Error)]
-pub enum ValidateVariableError {
-    #[error("unsupported type {type_str}")]
-    UnsupportedType { type_str: &'static str },
-    #[error("illegal field `{field}` for type {type_str}")]
-    IllegalField {
-        field: &'static str,
-        type_str: &'static str,
-    },
+pub enum InvalidVariableError {
+    #[error("pattern with choices")]
+    PatternWithChoices,
     #[error("unreasonable range")]
     UnreasonableRange,
-    #[error("default value not included in choices")]
+    #[error("default outside choices")]
     DefaultOutsideChoices,
 }
 

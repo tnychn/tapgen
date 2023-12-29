@@ -3,9 +3,8 @@ use std::sync::OnceLock;
 use minijinja::{Environment, Expression};
 use regex::Regex;
 use serde::Deserialize;
-use toml::Value;
 
-use crate::utils::{Result, ValidateVariableError};
+use crate::utils::{InvalidVariableError, Result};
 
 #[derive(Debug, Deserialize)]
 #[serde(try_from = "String")]
@@ -50,85 +49,67 @@ impl Condition {
 }
 
 #[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
+// #[serde(deny_unknown_fields)]
 pub struct Variable {
-    pub default: Value, // FIXME: use custom enum that includes other fields
+    #[serde(flatten)]
+    pub value: VariableValue,
     pub prompt: String,
-    pub choices: Option<Vec<String>>,
-    pub range: Option<(i64, i64)>, // FIXME: use dedicated struct
-    pub pattern: Option<Pattern>,
     pub condition: Option<Condition>,
 }
 
+#[derive(Debug, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+pub enum VariableValue {
+    String {
+        default: String,
+        pattern: Option<Pattern>,
+        choices: Option<Vec<String>>,
+    },
+    Array {
+        default: Vec<String>,
+        choices: Vec<String>,
+    },
+    Integer {
+        default: i64,
+        range: Option<(i64, i64)>,
+    },
+    Boolean {
+        default: bool,
+    },
+}
+
 impl Variable {
-    pub(crate) fn validate(self) -> Result<Self, ValidateVariableError> {
-        match &self.default {
-            Value::String(_) | Value::Array(_) | Value::Integer(_) | Value::Boolean(_) => {}
-            _ => {
-                return Err(ValidateVariableError::UnsupportedType {
-                    type_str: self.default.type_str(),
-                })
-            }
-        }
-        if let Some(choices) = &self.choices {
-            if self.pattern.is_some() {
-                return Err(ValidateVariableError::IllegalField {
-                    field: "pattern with choices",
-                    type_str: self.default.type_str(),
-                });
-            }
-            if choices.is_empty() {
-                return Err(ValidateVariableError::DefaultOutsideChoices);
-            }
-            match &self.default {
-                Value::String(default) => {
-                    if !default.is_empty() && !choices.iter().any(|choice| choice == default) {
-                        return Err(ValidateVariableError::DefaultOutsideChoices);
-                    }
+    pub fn validate(self) -> Result<Self, InvalidVariableError> {
+        match &self.value {
+            VariableValue::String {
+                default,
+                pattern,
+                choices: Some(choices),
+            } => {
+                if pattern.is_some() {
+                    return Err(InvalidVariableError::PatternWithChoices);
                 }
-                Value::Array(default) => {
-                    if !default.is_empty()
-                        && default.iter().any(|d| match d.as_str() {
-                            None => true,
-                            Some(d) => !choices.contains(&d.to_string()),
-                        })
-                    {
-                        return Err(ValidateVariableError::DefaultOutsideChoices);
-                    }
+                if choices.is_empty() {
+                    return Err(InvalidVariableError::DefaultOutsideChoices);
                 }
-                _ => {
-                    return Err(ValidateVariableError::IllegalField {
-                        field: "choices",
-                        type_str: self.default.type_str(),
-                    });
+                if !default.is_empty() && !choices.iter().any(|choice| choice == default) {
+                    return Err(InvalidVariableError::DefaultOutsideChoices);
                 }
             }
-        }
-        if let Some((min, max)) = &self.range {
-            match self.default {
-                Value::Integer(default) => {
-                    if min >= max || default < *min || default > *max {
-                        return Err(ValidateVariableError::UnreasonableRange);
-                    }
-                }
-                _ => {
-                    return Err(ValidateVariableError::IllegalField {
-                        field: "range",
-                        type_str: self.default.type_str(),
-                    });
+            VariableValue::Array { default, choices } => {
+                if !default.is_empty() && default.iter().any(|d| !choices.contains(d)) {
+                    return Err(InvalidVariableError::DefaultOutsideChoices);
                 }
             }
-        }
-        if self.pattern.is_some() {
-            match self.default {
-                Value::String(_) => {}
-                _ => {
-                    return Err(ValidateVariableError::IllegalField {
-                        field: "pattern",
-                        type_str: self.default.type_str(),
-                    });
+            VariableValue::Integer {
+                default,
+                range: Some((min, max)),
+            } => {
+                if min >= max || default < min || default > max {
+                    return Err(InvalidVariableError::UnreasonableRange);
                 }
             }
+            _ => {}
         }
         Ok(self)
     }
