@@ -46,7 +46,10 @@ impl Template {
         }
 
         let root = path.parent().unwrap().to_path_buf();
-        let base = root.join(&metadata.base).canonicalize()?; // FIXME: improve error handling
+        let base = root
+            .join(&metadata.base)
+            .canonicalize()
+            .map_err(Error::UncanonicalizableBasePath)?;
 
         let entries = BTreeMap::new();
         let mut environment = Environment::new();
