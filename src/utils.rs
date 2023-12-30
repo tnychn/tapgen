@@ -25,6 +25,8 @@ pub enum InvalidVariableError {
     PatternWithChoices,
     #[error("unreasonable range")]
     UnreasonableRange,
+    #[error("default mismatch pattern")]
+    DefaultMismatchPattern,
     #[error("default outside choices")]
     DefaultOutsideChoices,
 }

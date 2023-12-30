@@ -84,16 +84,22 @@ impl Variable {
             VariableValue::String {
                 default,
                 pattern,
-                choices: Some(choices),
+                choices,
             } => {
-                if pattern.is_some() {
-                    return Err(InvalidVariableError::PatternWithChoices);
-                }
-                if choices.is_empty() {
-                    return Err(InvalidVariableError::DefaultOutsideChoices);
-                }
-                if !default.is_empty() && !choices.iter().any(|choice| choice == default) {
-                    return Err(InvalidVariableError::DefaultOutsideChoices);
+                if let Some(choices) = choices {
+                    if pattern.is_some() {
+                        return Err(InvalidVariableError::PatternWithChoices);
+                    }
+                    if choices.is_empty() {
+                        return Err(InvalidVariableError::DefaultOutsideChoices);
+                    }
+                    if !default.is_empty() && !choices.iter().any(|choice| choice == default) {
+                        return Err(InvalidVariableError::DefaultOutsideChoices);
+                    }
+                } else if let Some(pattern) = pattern {
+                    if !default.is_empty() && !pattern.is_match(default) {
+                        return Err(InvalidVariableError::DefaultMismatchPattern);
+                    }
                 }
             }
             VariableValue::Array { default, choices } => {
