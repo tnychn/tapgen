@@ -19,7 +19,7 @@ impl TryFrom<String> for Url {
     fn try_from(value: String) -> Result<Self, Self::Error> {
         static URL_PATTERN: OnceLock<Regex> = OnceLock::new();
         if !URL_PATTERN.get_or_init(||Regex::new(r"https?:\/\/(www\.)?[-a-zA-Z0-9@:%._\+~#=]{1,256}\.[a-zA-Z0-9()]{1,6}\b([-a-zA-Z0-9()@:%_\+.~#?&//=]*)").unwrap()).is_match(&value) {
-            return Err(format!("invalid url: '{value}'")); // FIXME: improve error
+            return Err(format!("invalid url: '{value}'"));
         }
         Ok(Self(value))
     }

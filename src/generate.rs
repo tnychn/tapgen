@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 use std::fs::{self, Permissions};
 use std::path::{Path, PathBuf};
-use std::process::Command;
+use std::process::{Command, ExitStatus};
 use std::str::FromStr as _;
 
 use anyhow::{bail, Context as _, Result};
@@ -37,27 +37,28 @@ impl Generate {
         let mut path = if let Ok(source) = GitSource::from_str(&self.src) {
             source
                 .resolve(&config.prefix)
-                .context(format!("failed to resolve git source: {source}"))?
+                .context(format!("failed to resolve git source: '{source}'"))?
         } else {
             PathBuf::from(&self.src)
                 .canonicalize()
                 .context(format!("failed to resolve path source: {}", self.src))?
         };
-        {
-            if path.is_dir() {
-                path.push("tapgen.toml");
-            }
+        if path.is_dir() {
+            path.push("tapgen.toml");
         }
         let template = Template::load(&path)
             .context(format!("failed to load template from {}", path.display()))?;
-        {
-            print_template_metadata(&template.metadata);
-        }
+        print_template_metadata(&template.metadata);
         {
             let script = template.root.join("tapgen.before.hook");
             if script.exists() {
                 println!();
-                run_hook_script(&script, &template.root)?;
+                if prompt::confirm("Run before hook?", true) {
+                    let status = run_hook_script(&script, &template.root)?;
+                    if !status.success() {
+                        bail!("before hook failed with {}", status)
+                    }
+                }
             }
         }
         println!();
@@ -99,21 +100,29 @@ impl Generate {
             }
         }
         println!();
+        println!("Generating from template...");
         let output = template
             .generate(&values)
             .context("failed to generate from template")?;
-        inspect_output(&output);
+        println!("Successfully generated output!");
         {
-            let base = self.dst.join(output.basename());
-            if confirm_output(output, &self.dst)? {
-                let script = template.root.join("tapgen.after.hook");
-                if script.exists() {
-                    println!();
+            let script = template.root.join("tapgen.after.hook");
+            if script.exists() {
+                println!();
+                if prompt::confirm("Run after hook?", true) {
                     let path =
                         render_hook_script_as_template(script, &template.environment, &values)?;
-                    run_hook_script(path, base)?;
+                    let status = run_hook_script(path, output.base())?;
+                    if !status.success() {
+                        bail!("after hook failed with {}", status)
+                    }
                 }
             }
+        }
+        {
+            println!();
+            inspect_output(&output);
+            confirm_output(output, &self.dst)?;
         }
         Ok(())
     }
@@ -132,15 +141,12 @@ fn print_template_metadata(metadata: &Metadata) {
     }
 }
 
-fn run_hook_script(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<()> {
-    if prompt::confirm("Run hook script?", true) {
-        let path = path.as_ref();
-        Command::new(path)
-            .current_dir(&cwd)
-            .status()
-            .context(format!("failed to run hook script: {}", path.display()))?;
-    }
-    Ok(())
+fn run_hook_script(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<ExitStatus> {
+    let path = path.as_ref();
+    Command::new(path)
+        .current_dir(&cwd)
+        .status()
+        .context(format!("failed to run hook script: {}", path.display()))
 }
 
 fn render_hook_script_as_template(
@@ -233,14 +239,13 @@ fn inspect_output(output: &Output) {
     }
 }
 
-fn confirm_output(output: Output, dst: impl AsRef<Path>) -> Result<bool> {
+fn confirm_output(output: Output, dst: impl AsRef<Path>) -> Result<()> {
     if prompt::confirm("Apply output?", true) {
         output.apply(dst).context("failed to apply output")?;
         println!("Successfully applied output to destination!");
-        Ok(true)
     } else {
         output.dispose().context("failed to dispose output")?;
         println!("Disposed output!");
-        Ok(false)
     }
+    Ok(())
 }
