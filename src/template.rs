@@ -53,7 +53,12 @@ impl Template {
 
         let entries = BTreeMap::new();
         let mut environment = Environment::new();
-        environment.add_function("year", || String::from("2023")); // DEBUG
+        environment.add_filter("slugify", |s: String| {
+            s.to_lowercase()
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join("-")
+        });
 
         Self {
             path,

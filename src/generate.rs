@@ -5,8 +5,9 @@ use std::process::Command;
 use std::str::FromStr as _;
 
 use anyhow::{bail, Context as _, Result};
+use chrono::prelude::*;
 use clap::Args;
-use minijinja::Environment;
+use minijinja::{Environment, Value};
 use tapgen::metadata::Metadata;
 use tempfile::{NamedTempFile, TempPath};
 use walkdir::WalkDir;
@@ -42,59 +43,78 @@ impl Generate {
                 .canonicalize()
                 .context(format!("failed to resolve path source: {}", self.src))?
         };
-        if path.is_dir() {
-            path.push("tapgen.toml");
+        {
+            if path.is_dir() {
+                path.push("tapgen.toml");
+            }
         }
-
         let template = Template::load(&path)
             .context(format!("failed to load template from {}", path.display()))?;
-
-        print_template_metadata(&template.metadata);
-
-        let script = template.root.join("tapgen.before.hook");
-        if script.exists() {
-            println!();
-            run_hook_script(&script, &template.root)?;
+        {
+            print_template_metadata(&template.metadata);
         }
-
-        let mut values = HashMap::new();
-        if git::check_installed()? {
-            values.insert(
-                String::from("_git"),
-                minijinja::Value::from_serializable(&git::obtain_config()?),
-            );
+        {
+            let script = template.root.join("tapgen.before.hook");
+            if script.exists() {
+                println!();
+                run_hook_script(&script, &template.root)?;
+            }
         }
         println!();
-        for (name, variable) in &template.variables {
-            if let Some(condition) = &variable.condition {
-                let value = condition.eval(&values).context(format!(
-                    "failed to evaluate condition for variable: '{name}'"
-                ))?;
-                if !value.is_true() {
-                    continue;
-                }
+        let mut values = HashMap::new();
+        {
+            if git::check_installed()? {
+                values.insert(
+                    String::from("_git"),
+                    Value::from_serializable(&git::obtain_config()?),
+                );
             }
-            let value = prompt_variable(variable);
-            values.insert(name.clone(), value);
         }
-
+        {
+            let now = Local::now();
+            values.insert(
+                String::from("_now"),
+                Value::from_serializable(&HashMap::from([
+                    ("year", now.year() as u32),
+                    ("month", now.month()),
+                    ("day", now.day()),
+                    ("hour", now.hour()),
+                    ("minute", now.minute()),
+                    ("second", now.second()),
+                ])),
+            );
+        }
+        {
+            for (name, variable) in &template.variables {
+                if let Some(condition) = &variable.condition {
+                    let value = condition.eval(&values).context(format!(
+                        "failed to evaluate condition for variable: '{name}'"
+                    ))?;
+                    if !value.is_true() {
+                        continue;
+                    }
+                }
+                let value = prompt_variable(variable);
+                values.insert(name.clone(), value);
+            }
+        }
+        println!();
         let output = template
             .generate(&values)
             .context("failed to generate from template")?;
-
-        println!();
         inspect_output(&output);
-
-        let base = self.dst.join(output.basename());
-        if confirm_output(output, &self.dst)? {
-            let script = template.root.join("tapgen.after.hook");
-            if script.exists() {
-                println!();
-                let path = render_hook_script_as_template(script, &template.environment, &values)?;
-                run_hook_script(path, base)?;
+        {
+            let base = self.dst.join(output.basename());
+            if confirm_output(output, &self.dst)? {
+                let script = template.root.join("tapgen.after.hook");
+                if script.exists() {
+                    println!();
+                    let path =
+                        render_hook_script_as_template(script, &template.environment, &values)?;
+                    run_hook_script(path, base)?;
+                }
             }
         }
-
         Ok(())
     }
 }
@@ -126,7 +146,7 @@ fn run_hook_script(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<()> 
 fn render_hook_script_as_template(
     path: impl AsRef<Path>,
     env: &Environment<'static>,
-    values: &HashMap<String, minijinja::Value>,
+    values: &HashMap<String, Value>,
 ) -> Result<TempPath> {
     let path = path.as_ref();
     let source = fs::read_to_string(path)
@@ -151,7 +171,7 @@ fn render_hook_script_as_template(
     Ok(file.into_temp_path())
 }
 
-fn prompt_variable(variable: &Variable) -> minijinja::Value {
+fn prompt_variable(variable: &Variable) -> Value {
     match &variable.value {
         VariableValue::String {
             default,
@@ -164,7 +184,7 @@ fn prompt_variable(variable: &Variable) -> minijinja::Value {
                 Some(default.clone())
             };
             if let Some(choices) = choices {
-                minijinja::Value::from(prompt::select(&variable.prompt, choices, default))
+                Value::from(prompt::select(&variable.prompt, choices, default))
             } else {
                 let validator = pattern.as_ref().map(|pattern| {
                     |input: &String| {
@@ -175,15 +195,15 @@ fn prompt_variable(variable: &Variable) -> minijinja::Value {
                         Ok(())
                     }
                 });
-                minijinja::Value::from(prompt::input(&variable.prompt, default, validator))
+                Value::from(prompt::input(&variable.prompt, default, validator))
             }
         }
-        VariableValue::Array { default, choices } => minijinja::Value::from(prompt::multi_select(
+        VariableValue::Array { default, choices } => Value::from(prompt::multi_select(
             &variable.prompt,
             choices,
             Some(default),
         )),
-        VariableValue::Integer { default, range } => minijinja::Value::from(prompt::input(
+        VariableValue::Integer { default, range } => Value::from(prompt::input(
             &variable.prompt,
             Some(*default),
             Some(|input: &i64| {
@@ -196,7 +216,7 @@ fn prompt_variable(variable: &Variable) -> minijinja::Value {
             }),
         )),
         VariableValue::Boolean { default } => {
-            minijinja::Value::from(prompt::confirm(&variable.prompt, *default))
+            Value::from(prompt::confirm(&variable.prompt, *default))
         }
     }
 }

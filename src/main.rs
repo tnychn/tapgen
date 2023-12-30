@@ -1,7 +1,5 @@
 // ===== ROADMAP =====
 //
-// TODO: implement extensible custom template functions
-//
 // TODO: implement custom base path shorthand
 //
 // TODO: implement cli variable value override
@@ -11,6 +9,8 @@
 // TODO: implement generation replay
 //
 // TODO: implement templated defaults
+//
+// TODO: implement extensible custom template functions
 
 mod config;
 mod generate;
