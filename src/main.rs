@@ -4,8 +4,6 @@
 //
 // TODO: implement cli variable value override
 //
-// TODO: implement remote subdirectory template
-//
 // TODO: implement generation replay
 //
 // TODO: implement templated defaults

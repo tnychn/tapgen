@@ -2,9 +2,9 @@ use std::collections::HashMap;
 use std::fs::{self, Permissions};
 use std::path::{Path, PathBuf};
 use std::process::{Command, ExitStatus};
-use std::str::FromStr as _;
+use std::str::FromStr;
 
-use anyhow::{bail, Context as _, Result};
+use anyhow::{bail, Context as _, Error, Result};
 use chrono::prelude::*;
 use clap::Args;
 use minijinja::{Environment, Value};
@@ -19,10 +19,47 @@ use crate::config::Config;
 use crate::git::{self, Source as GitSource};
 use crate::prompt;
 
+#[derive(Clone)]
+enum Source {
+    Local(PathBuf),
+    Git(GitSource),
+}
+
+impl FromStr for Source {
+    type Err = Error;
+
+    fn from_str(s: &str) -> Result<Self, Self::Err> {
+        if let Ok(source) = GitSource::from_str(s) {
+            return Ok(Self::Git(source));
+        }
+        Ok(Self::Local(PathBuf::from(s)))
+    }
+}
+
+impl Source {
+    fn resolve(&self, prefix: impl AsRef<Path>) -> Result<PathBuf> {
+        let mut path = match self {
+            Self::Local(path) => path
+                .canonicalize()
+                .context(format!("failed to resolve path source: {}", path.display()))?,
+            Self::Git(source) => source
+                .resolve(prefix)
+                .context(format!("failed to resolve git source: '{source}'"))?,
+        };
+        if path.is_dir() {
+            path.push("tapgen.toml");
+        }
+        Ok(path)
+    }
+}
+
 #[derive(Clone, Args)]
 pub(crate) struct Generate {
-    #[arg(help = "Source of template to be generated from.")]
-    src: String,
+    #[arg(
+        help = "Source of template to be generated from.",
+        value_parser = Source::from_str,
+    )]
+    src: Source,
     #[arg(
         help = "Destination of generated output to be applied to.",
         default_value = std::env::current_dir()
@@ -34,18 +71,7 @@ pub(crate) struct Generate {
 
 impl Generate {
     pub(crate) fn run(&self, config: &Config) -> Result<()> {
-        let mut path = if let Ok(source) = GitSource::from_str(&self.src) {
-            source
-                .resolve(&config.prefix)
-                .context(format!("failed to resolve git source: '{source}'"))?
-        } else {
-            PathBuf::from(&self.src)
-                .canonicalize()
-                .context(format!("failed to resolve path source: {}", self.src))?
-        };
-        if path.is_dir() {
-            path.push("tapgen.toml");
-        }
+        let path = self.src.resolve(&config.prefix)?;
         let template = Template::load(&path)
             .context(format!("failed to load template from {}", path.display()))?;
         print_template_metadata(&template.metadata);
@@ -56,7 +82,7 @@ impl Generate {
                 if prompt::confirm("Run before hook?", true) {
                     let status = run_hook_script(&script, &template.root)?;
                     if !status.success() {
-                        bail!("before hook failed with {}", status)
+                        bail!("before hook failed with {status}")
                     }
                 }
             }
@@ -88,10 +114,13 @@ impl Generate {
         {
             for (name, variable) in &template.variables {
                 if let Some(condition) = &variable.condition {
-                    let value = condition.eval(&values).context(format!(
-                        "failed to evaluate condition for variable: '{name}'"
-                    ))?;
-                    if !value.is_true() {
+                    if !condition
+                        .eval(&values)
+                        .context(format!(
+                            "failed to evaluate condition for variable: '{name}'"
+                        ))?
+                        .is_true()
+                    {
                         continue;
                     }
                 }
@@ -110,11 +139,12 @@ impl Generate {
             if script.exists() {
                 println!();
                 if prompt::confirm("Run after hook?", true) {
-                    let path =
-                        render_hook_script_as_template(script, &template.environment, &values)?;
-                    let status = run_hook_script(path, output.base())?;
+                    let status = run_hook_script(
+                        render_hook_script_as_template(script, &template.environment, &values)?,
+                        output.base(),
+                    )?;
                     if !status.success() {
-                        bail!("after hook failed with {}", status)
+                        bail!("after hook failed with {status}")
                     }
                 }
             }

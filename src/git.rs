@@ -5,7 +5,7 @@ use std::process::{Command, Stdio};
 use std::str::FromStr;
 use std::sync::OnceLock;
 
-use anyhow::{bail, Context, Error, Result};
+use anyhow::{bail, Context as _, Error, Result};
 use regex::Regex;
 
 use crate::{git, prompt};
@@ -43,8 +43,9 @@ impl Display for Host {
 #[derive(Clone)]
 pub(crate) struct Source {
     host: Host,
-    pub(crate) owner: String,
-    pub(crate) repo: String,
+    owner: String,
+    repo: String,
+    pub(crate) dir: Option<String>,
 }
 
 impl Display for Source {
@@ -59,14 +60,14 @@ impl FromStr for Source {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         static PATTERN: OnceLock<Regex> = OnceLock::new();
         let pattern = PATTERN.get_or_init(|| {
-            Regex::new(r"^(github|gitlab|bitbucket):([a-zA-Z0-9._-]+)\/([a-zA-Z0-9._-]+)$").unwrap()
+            Regex::new(r"^(?<host>github|gitlab|bitbucket):(?<owner>[a-zA-Z0-9._-]+)\/(?<repo>[a-zA-Z0-9._-]+)(\/(?<dir>[a-zA-Z0-9._-]+))?$").unwrap()
         });
         if let Some(captures) = pattern.captures(s) {
-            let (_, [host, owner, repo]) = captures.extract();
             return Ok(Self {
-                host: Host::from_str(host).unwrap(),
-                owner: owner.to_string(),
-                repo: repo.to_string(),
+                host: Host::from_str(captures.name("host").unwrap().as_str()).unwrap(),
+                owner: captures.name("owner").unwrap().as_str().to_string(),
+                repo: captures.name("repo").unwrap().as_str().to_string(),
+                dir: captures.name("dir").map(|m| m.as_str().to_string()),
             });
         }
         bail!("mismatched git source pattern")
@@ -78,11 +79,11 @@ impl Source {
         if !git::check_installed()? {
             bail!("git is not installed; required for git source")
         }
-        let dst = &prefix.as_ref().join(&self.owner).join(&self.repo);
+        let mut dst = prefix.as_ref().join(&self.owner).join(&self.repo);
         if dst.exists() {
             println!("Repository already exists: {}", dst.display());
             println!("Checking for updates...");
-            let repository = Repository::new(dst);
+            let repository = Repository::new(&dst);
             if repository
                 .check_fastforwardable()
                 .context("failed to check if git repository is fast-forwardable")?
@@ -94,10 +95,13 @@ impl Source {
                 println!("Repository is up to date.");
             }
         } else {
-            let _ = Repository::clone(self, dst)?;
+            Repository::clone(self, &dst)?;
         }
         println!();
-        Ok(dst.clone())
+        if let Some(dir) = &self.dir {
+            dst.push(dir);
+        }
+        Ok(dst)
     }
 }
 
@@ -116,7 +120,7 @@ impl Repository {
             .status()
             .context("failed to execute git clone command")?;
         if !status.success() {
-            bail!("failed to clone git repository")
+            bail!("failed to clone git repository ({status})")
         }
         Ok(Self(dst.as_ref().to_path_buf()))
     }
@@ -128,7 +132,7 @@ impl Repository {
             .status()
             .context("failed to execute git pull command")?;
         if !status.success() {
-            bail!("failed to pull git repository")
+            bail!("failed to pull git repository ({status})")
         }
         Ok(())
     }
@@ -144,7 +148,7 @@ impl Repository {
             .status()
             .context("failed to execute git remote update command")?;
         if !status.success() {
-            bail!("failed to update remote refs of git repository")
+            bail!("failed to update remote refs of git repository ({status})")
         }
         let command = Command::new("git")
             .arg("status")
@@ -156,7 +160,7 @@ impl Repository {
             .output()
             .context("failed to execute git status command")?;
         if !command.status.success() {
-            bail!("failed to check updated status of git repository")
+            bail!("failed to check updated status of git repository ({status})")
         }
         let output = String::from_utf8(command.stdout)
             .expect("command output encoding should be utf-8")
@@ -204,6 +208,6 @@ pub(crate) fn check_installed() -> Result<bool> {
         .stdout(Stdio::null())
         .stderr(Stdio::null())
         .status()
-        .context("failed to check if git is installed")?;
+        .context("failed to execute git version command")?;
     Ok(check.success())
 }
