@@ -17,12 +17,14 @@ use tapgen::variable::{Variable, VariableValue};
 
 use crate::config::Config;
 use crate::git::{self, Source as GitSource};
+use crate::prefix::Source as PrefixSource;
 use crate::prompt;
 
 #[derive(Clone)]
 enum Source {
-    Local(PathBuf),
+    Path(PathBuf),
     Git(GitSource),
+    Prefix(PrefixSource),
 }
 
 impl FromStr for Source {
@@ -31,25 +33,44 @@ impl FromStr for Source {
     fn from_str(s: &str) -> Result<Self, Self::Err> {
         if let Ok(source) = GitSource::from_str(s) {
             return Ok(Self::Git(source));
+        } else if let Ok(source) = PrefixSource::from_str(s) {
+            return Ok(Self::Prefix(source));
         }
-        Ok(Self::Local(PathBuf::from(s)))
+        Ok(Self::Path(PathBuf::from(s)))
     }
 }
 
 impl Source {
+    fn kind(&self) -> &'static str {
+        match self {
+            Self::Path(_) => "path",
+            Self::Git(source) => {
+                if source.path.is_some() {
+                    "git+path"
+                } else {
+                    "git"
+                }
+            }
+            Self::Prefix(_) => "prefix",
+        }
+    }
+
     fn resolve(&self, prefix: impl AsRef<Path>) -> Result<PathBuf> {
         let mut path = match self {
-            Self::Local(path) => path
-                .canonicalize()
-                .context(format!("failed to resolve path source: {}", path.display()))?,
             Self::Git(source) => source
                 .resolve(prefix)
                 .context(format!("failed to resolve git source: '{source}'"))?,
+            Self::Prefix(source) => prefix.as_ref().join(source),
+            Self::Path(path) => path.clone(),
         };
         if path.is_dir() {
             path.push("tapgen.toml");
         }
-        Ok(path)
+        path.canonicalize().context(format!(
+            "failed to resolve path: '{}' (source kind: {})",
+            path.display(),
+            self.kind()
+        ))
     }
 }
 
@@ -73,7 +94,7 @@ impl Generate {
     pub(crate) fn run(&self, config: &Config) -> Result<()> {
         let path = self.src.resolve(&config.prefix)?;
         let template = Template::load(&path)
-            .context(format!("failed to load template from {}", path.display()))?;
+            .context(format!("failed to load template from '{}'", path.display()))?;
         print_template_metadata(&template.metadata);
         {
             let script = template.root.join("tapgen.before.hook");
@@ -176,7 +197,7 @@ fn run_hook_script(path: impl AsRef<Path>, cwd: impl AsRef<Path>) -> Result<Exit
     Command::new(path)
         .current_dir(&cwd)
         .status()
-        .context(format!("failed to run hook script: {}", path.display()))
+        .context(format!("failed to run hook script: '{}'", path.display()))
 }
 
 fn render_hook_script_as_template(
@@ -186,14 +207,14 @@ fn render_hook_script_as_template(
 ) -> Result<TempPath> {
     let path = path.as_ref();
     let source = fs::read_to_string(path)
-        .context(format!("failed to read hook script: {}", path.display()))?;
+        .context(format!("failed to read hook script: '{}'", path.display()))?;
     let template = env.template_from_str(&source).context(format!(
-        "failed to load hook script as template: {}",
+        "failed to load hook script as template: '{}'",
         path.display()
     ))?;
     let file = NamedTempFile::with_prefix("").context("failed to create temporary file")?;
     template.render_to_write(values, &file).context(format!(
-        "failed to render hook script as template: {}",
+        "failed to render hook script as template: '{}'",
         path.display()
     ))?;
     #[cfg(unix)]

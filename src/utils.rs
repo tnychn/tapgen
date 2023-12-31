@@ -18,7 +18,7 @@ pub enum Error {
         source: InvalidVariableError,
     },
     #[error("cannot canonicalize base path")]
-    UncanonicalizableBasePath(#[source] std::io::Error),
+    CanonicalizeBasePath(#[source] std::io::Error),
 }
 
 #[derive(Debug, thiserror::Error)]

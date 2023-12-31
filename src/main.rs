@@ -1,7 +1,5 @@
 // ===== ROADMAP =====
 //
-// TODO: implement custom base path shorthand
-//
 // TODO: implement cli variable value override
 //
 // TODO: implement generation replay
@@ -13,6 +11,7 @@
 mod config;
 mod generate;
 mod git;
+mod prefix;
 mod prompt;
 
 use std::fs;

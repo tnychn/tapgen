@@ -49,7 +49,7 @@ impl Template {
         let base = root
             .join(&metadata.base)
             .canonicalize()
-            .map_err(Error::UncanonicalizableBasePath)?;
+            .map_err(Error::CanonicalizeBasePath)?;
 
         let entries = BTreeMap::new();
         let mut environment = Environment::new();

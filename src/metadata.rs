@@ -1,4 +1,3 @@
-use std::fmt::Display;
 use std::path::{Path, PathBuf};
 
 use std::sync::OnceLock;
@@ -25,7 +24,7 @@ impl TryFrom<String> for Url {
     }
 }
 
-impl Display for Url {
+impl std::fmt::Display for Url {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         self.0.fmt(f)
     }
@@ -69,7 +68,7 @@ pub struct Metadata {
     #[serde(rename = "__description__")]
     pub description: Option<String>,
     #[serde(rename = "__base__", default)]
-    pub base: PathBuf, // relative path // TODO: compile time validation
+    pub base: PathBuf, // relative path
     #[serde(rename = "__copy__", default)]
     pub copy: GlobPatterns,
     #[serde(rename = "__exclude__", default)]
