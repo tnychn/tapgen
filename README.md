@@ -84,6 +84,16 @@ __exclude__ = ["*.png"]
 
 TODO
 
+## TODO
+
+- [ ] Override variable values in CLI.
+
+- [ ] Replay previous generation.
+
+- [ ] Support templated defaults.
+
+- [ ] Extend template filters/functions/tests via scripting.
+
 ---
 
 <p align="center">
