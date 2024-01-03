@@ -54,13 +54,13 @@ pub(crate) fn multi_select<P: Into<String>, T: ToString + Clone>(
         .collect()
 }
 
-pub(crate) fn confirm(prompt: impl Into<String>, default: bool) -> bool {
+pub(crate) fn confirm(prompt: impl Into<String>, default: Option<bool>) -> bool {
     let theme = THEME.get_or_init(|| SimpleTheme);
-    Confirm::with_theme(theme)
-        .with_prompt(prompt)
-        .default(default)
-        .interact()
-        .unwrap()
+    let mut p = Confirm::with_theme(theme).with_prompt(prompt);
+    if let Some(default) = default {
+        p = p.default(default);
+    }
+    p.interact().unwrap()
 }
 
 pub(crate) fn input<'a, T: 'a, V>(

@@ -9,6 +9,7 @@
 // TODO: implement extensible custom template functions
 
 mod config;
+mod copy;
 mod generate;
 mod git;
 mod prefix;

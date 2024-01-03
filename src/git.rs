@@ -89,7 +89,7 @@ impl Source {
                 .check_fastforwardable()
                 .context("failed to check if git repository is fast-forwardable")?
             {
-                if prompt::confirm("Outdated. Pull to update?", true) {
+                if prompt::confirm("Outdated. Pull to update?", Some(true)) {
                     repository.pull()?;
                 }
             } else {

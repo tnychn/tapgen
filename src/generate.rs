@@ -9,13 +9,14 @@ use chrono::prelude::*;
 use clap::Args;
 use minijinja::{Environment, Value};
 use tapgen::metadata::Metadata;
-use tempfile::{NamedTempFile, TempPath};
+use tempfile::NamedTempFile;
 use walkdir::WalkDir;
 
 use tapgen::template::{Output, Template};
 use tapgen::variable::{Variable, VariableValue};
 
 use crate::config::Config;
+use crate::copy::copy_dir_all;
 use crate::git::{self, Source as GitSource};
 use crate::prefix::Source as PrefixSource;
 use crate::prompt;
@@ -88,6 +89,8 @@ pub(crate) struct Generate {
             .into_os_string(),
         )]
     dst: PathBuf,
+    #[arg(short = 'O', long = "overwrite", help = "Overwrite existing files.")]
+    overwrite: bool,
 }
 
 impl Generate {
@@ -100,7 +103,7 @@ impl Generate {
             let script = template.root.join("tapgen.before.hook");
             if script.exists() {
                 println!();
-                if prompt::confirm("Run before hook?", true) {
+                if prompt::confirm("Run before hook?", Some(true)) {
                     let status = run_hook_script(&script, &template.root)?;
                     if !status.success() {
                         bail!("before hook failed with {status}")
@@ -154,12 +157,13 @@ impl Generate {
         let output = template
             .generate(&values)
             .context("failed to generate from template")?;
-        println!("Successfully generated output!");
+        println!("Successfully generated output to temporary directory!");
+        println!("=> '{}'", output.path().display());
         {
             let script = template.root.join("tapgen.after.hook");
             if script.exists() {
                 println!();
-                if prompt::confirm("Run after hook?", true) {
+                if prompt::confirm("Run after hook?", Some(true)) {
                     let status = run_hook_script(
                         render_hook_script_as_template(script, &template.environment, &values)?,
                         output.base(),
@@ -173,7 +177,7 @@ impl Generate {
         {
             println!();
             inspect_output(&output);
-            confirm_output(output, &self.dst)?;
+            confirm_output(output, &self.dst, self.overwrite)?;
         }
         Ok(())
     }
@@ -204,7 +208,7 @@ fn render_hook_script_as_template(
     path: impl AsRef<Path>,
     env: &Environment<'static>,
     values: &HashMap<String, Value>,
-) -> Result<TempPath> {
+) -> Result<NamedTempFile> {
     let path = path.as_ref();
     let source = fs::read_to_string(path)
         .context(format!("failed to read hook script: '{}'", path.display()))?;
@@ -225,7 +229,7 @@ fn render_hook_script_as_template(
             .set_permissions(perms)
             .context("failed to set temporary file permission")?;
     }
-    Ok(file.into_temp_path())
+    Ok(file)
 }
 
 fn prompt_variable(variable: &Variable) -> Value {
@@ -273,7 +277,7 @@ fn prompt_variable(variable: &Variable) -> Value {
             }),
         )),
         VariableValue::Boolean { default } => {
-            Value::from(prompt::confirm(&variable.prompt, *default))
+            Value::from(prompt::confirm(&variable.prompt, Some(*default)))
         }
     }
 }
@@ -290,12 +294,22 @@ fn inspect_output(output: &Output) {
     }
 }
 
-fn confirm_output(output: Output, dst: impl AsRef<Path>) -> Result<()> {
-    if prompt::confirm("Apply output?", true) {
-        output.apply(dst).context("failed to apply output")?;
+fn confirm_output(output: Output, dst: impl AsRef<Path>, force: bool) -> Result<()> {
+    let tempdir = output.into_tempdir();
+    if prompt::confirm(
+        if force {
+            "Apply output (force overwrite)?"
+        } else {
+            "Apply output?"
+        },
+        Some(true),
+    ) {
+        let (c, o, s) =
+            copy_dir_all(&dst, tempdir, &dst, force).context("failed to apply output")?;
         println!("Successfully applied output to destination!");
+        println!("Created {c} files. Overwritten {o} files. Skipped {s} files.");
     } else {
-        output.dispose().context("failed to dispose output")?;
+        tempdir.close().context("failed to dispose output")?;
         println!("Disposed output!");
     }
     Ok(())

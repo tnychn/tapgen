@@ -1,9 +1,8 @@
-use std::fs;
 use std::path::Path;
 
 use memchr::memchr;
 
-// TODO: improve error structure and propagation
+// TODO: include path in std::io::Error
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
     #[error(transparent)]
@@ -34,20 +33,6 @@ pub enum InvalidVariableError {
 }
 
 pub type Result<T, E = Error> = std::result::Result<T, E>;
-
-pub(crate) fn copy_dir_all(src: impl AsRef<Path>, dst: impl AsRef<Path>) -> std::io::Result<()> {
-    fs::create_dir_all(&dst)?;
-    for entry in fs::read_dir(src)? {
-        let entry = entry?;
-        let to = dst.as_ref().join(entry.file_name());
-        if entry.file_type()?.is_dir() {
-            copy_dir_all(entry.path(), to)?;
-        } else {
-            fs::copy(entry.path(), to)?;
-        }
-    }
-    Ok(())
-}
 
 pub(crate) fn is_binary_buf(buf: &[u8]) -> bool {
     memchr(0u8, buf).is_some()

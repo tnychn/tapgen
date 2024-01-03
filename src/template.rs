@@ -152,24 +152,24 @@ pub struct Output {
 }
 
 impl Output {
-    pub fn basename(&self) -> &str {
-        &self.basename
-    }
-
     pub fn path(&self) -> &Path {
         self.tempdir.path()
     }
 
     pub fn base(&self) -> PathBuf {
-        self.tempdir.path().join(self.basename())
+        self.path().join(&self.basename)
     }
 
-    pub fn dispose(self) -> Result<()> {
-        Ok(self.tempdir.close()?)
+    pub fn into_tempdir(self) -> TempDir {
+        self.tempdir
     }
 
-    pub fn apply(self, dst: impl AsRef<Path>) -> Result<()> {
-        utils::copy_dir_all(self.path(), dst)?;
-        self.dispose()
-    }
+    // pub fn dispose(self) -> Result<()> {
+    //     Ok(self.tempdir.close()?)
+    // }
+
+    // pub fn apply(self, dst: impl AsRef<Path>) -> Result<()> {
+    //     utils::copy_dir_all(self.path(), dst)?;
+    //     self.dispose()
+    // }
 }
